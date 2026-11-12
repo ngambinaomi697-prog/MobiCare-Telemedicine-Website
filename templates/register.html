@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Create account | MobiCare{% endblock %}
+{% block content %}
+<section style="max-width:720px;margin:12px auto" class="card">
+  <p class="eyebrow">Join MobiCare</p><h1 style="font-size:2.2rem">Create your account</h1>
+  <p class="muted">Set up a patient or doctor account to get started.</p>
+  <form method="post">
+    <div class="form-grid">
+      <div class="field"><label for="full_name">Full name</label><input id="full_name" name="full_name" autocomplete="name" required></div>
+      <div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>
+      <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="phone">Phone (optional)</label><input id="phone" name="phone" type="tel" autocomplete="tel"></div>
+      <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" minlength="6" autocomplete="new-password" required></div>
+      <div class="field"><label for="confirm_password">Confirm password</label><input id="confirm_password" name="confirm_password" type="password" minlength="6" autocomplete="new-password" required></div>
+      <div class="field"><label for="role">Account type</label><select id="role" name="role" required><option value="patient">Patient</option><option value="doctor">Doctor</option></select></div>
+      <div class="field"><label for="specialty">Specialty (doctors only)</label><input id="specialty" name="specialty" autocomplete="organization-title"></div>
+    </div>
+    <button class="button" type="submit">Create account</button>
+  </form>
+</section>
+{% endblock %}
