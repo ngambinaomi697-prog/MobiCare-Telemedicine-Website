@@ -29,6 +29,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ==========================================================
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True,
+)
 DATABASE = os.environ.get("MOBICARE_DATABASE", "mobicare.db")
 _neon_loop = None
 _neon_loop_thread = None
@@ -230,6 +235,12 @@ def _validate_csrf_token():
     submitted = request.form.get("csrf_token", "")
     if not expected or not submitted or not hmac.compare_digest(expected, submitted):
         abort(400)
+
+
+@app.before_request
+def protect_state_changing_requests():
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        _validate_csrf_token()
 
 
 # ==========================================================
@@ -462,7 +473,7 @@ def login():
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     flash("You have been logged out.", "info")
@@ -596,7 +607,7 @@ def book_appointment():
     return redirect(url_for("patient_dashboard"))
 
 
-@app.route("/patient/cancel/<int:appt_id>")
+@app.route("/patient/cancel/<int:appt_id>", methods=["POST"])
 @login_required
 @role_required("patient")
 def cancel_appointment(appt_id):
@@ -741,7 +752,7 @@ def add_record():
     return redirect(url_for("doctor_dashboard"))
 
 
-@app.route("/doctor/complete/<int:appt_id>")
+@app.route("/doctor/complete/<int:appt_id>", methods=["POST"])
 @login_required
 @role_required("doctor")
 def complete_appointment(appt_id):
