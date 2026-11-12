@@ -2,7 +2,7 @@
 ==========================================================
  compare - Telemedicine Platform
  Pure Python backend that connects to your existing HTML files
- Run: python app.py
+ Run: python MobiCare.py
 ==========================================================
 """
 
@@ -22,7 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # APP CONFIGURATION
 # ==========================================================
 app = Flask(__name__)
-app.secret_key = "mobicare-super-secret-key-2010"
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 DATABASE = "mobicare.db"
 
 
@@ -39,16 +39,7 @@ def get_db():
 def init_db():
     """Create tables + seed demo users on first run."""
     conn = get_db()
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL, 
-        password_hash TEXT NOT NULL, 
-        full_name TEXT NOT NULL,
-        role TEXT NOT NULL)''')
-    conn.commit()
     cur = conn.cursor()
-
     cur.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -493,6 +484,6 @@ if __name__ == "__main__":
     print("=" * 55)
     print(" 🌐 http://127.0.0.1:5000")
     print(" 👤 Patient : Chisomo_Banda / patient123")
-    print(" 🩺 Doctor  : dr_sande / doctor123")
+    print(" 🩺 Doctor  : dr_sande / doctor101")
     print("=" * 55 + "\n")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=False, host="0.0.0.0", port=5000)

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}MobiCare | Care that comes closer{% endblock %}
+{% block content %}
+<section class="hero-grid">
+  <div>
+    <p class="eyebrow">Healthcare, within reach</p>
+    <h1>Good care starts with a closer connection.</h1>
+    <p class="muted" style="max-width:590px;font-size:1.12rem">Connect with your care team, plan appointments, and keep your health journey moving — wherever you are.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:26px"><a class="button" href="{{ url_for('register') }}">Get started</a><a class="button secondary" href="{{ url_for('login') }}">Sign in to your account</a></div>
+  </div>
+  <aside class="card" aria-label="MobiCare services">
+    <p class="eyebrow">Your care, connected</p>
+    <h2>One place for the next step.</h2>
+    <div style="display:grid;gap:16px;margin-top:22px">
+      <div><strong>Appointments</strong><div class="muted">Request a visit with your doctor.</div></div>
+      <div><strong>Health records</strong><div class="muted">Keep care notes together in your portal.</div></div>
+      <div><strong>Consultations</strong><div class="muted">Join your care team for a telemedicine visit.</div></div>
+    </div>
+  </aside>
+</section>
+<section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;padding-bottom:24px" aria-label="Ways to use MobiCare">
+  <article class="card"><p class="eyebrow">For patients</p><h3>Stay in the know</h3><p class="muted">Book appointments and review your care history from your patient dashboard.</p><a href="{{ url_for('register') }}">Create a patient account</a></article>
+  <article class="card"><p class="eyebrow">For clinicians</p><h3>Support every visit</h3><p class="muted">Manage appointments and share visit records through your doctor dashboard.</p><a href="{{ url_for('register') }}">Create a doctor account</a></article>
+</section>
+{% endblock %}
