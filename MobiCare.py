@@ -388,8 +388,12 @@ def register():
         phone = request.form.get("phone", "").strip()
         specialty = request.form.get("specialty", "").strip()
 
+        _validate_csrf_token()
         if not all([username, email, password, full_name, role]):
             flash("Please fill in all required fields.", "danger")
+            return redirect(url_for("register"))
+        if role not in {"patient", "doctor"}:
+            flash("Choose a valid account type.", "danger")
             return redirect(url_for("register"))
 
         if password != confirm:
@@ -410,18 +414,23 @@ def register():
             flash("Username or email already exists.", "danger")
             return redirect(url_for("register"))
 
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO users (username, email, password_hash, full_name, "
             "role, phone, specialty) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (username, email, generate_password_hash(password),
              full_name, role, phone,
              specialty if role == "doctor" else None)
         )
+        user_id = cursor.lastrowid
         conn.commit()
         conn.close()
 
-        flash("Account created successfully! Please log in.", "success")
-        return redirect(url_for("login"))
+        session.clear()
+        session["user_id"] = user_id
+        session["role"] = role
+        session["full_name"] = full_name
+        flash("Your account is ready. Explore your MobiCare dashboard.", "success")
+        return redirect(url_for("dashboard"))
 
     return render_template("register.html")
 
