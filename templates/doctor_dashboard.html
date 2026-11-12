@@ -2,6 +2,20 @@
 {% block title %}Doctor dashboard | MobiCare{% endblock %}
 {% block content %}
 <p class="eyebrow">Doctor portal</p><h1 style="font-size:2.5rem">Your care team workspace</h1><p class="muted">Review visit requests and add notes to patient records.</p>
+<section class="card" style="margin:24px 0"><p class="eyebrow">Remote monitoring</p><h2>Patient readings and alerts</h2><p class="muted">Readings are shown for patients with an appointment in your care history. Alerts are screening cues, not diagnoses.</p>
+  {% if vitals %}<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Recorded</th><th>Blood pressure</th><th>Heart rate</th><th>Temperature</th><th>Oxygen</th><th>Alert</th><th>Review</th></tr></thead><tbody>
+    {% for reading in vitals %}<tr>
+      <td>{{ reading.patient_name }}</td>
+      <td>{{ reading.recorded_at.strftime('%b %d, %Y %H:%M') }}</td>
+      <td>{{ reading.systolic_mm_hg }}/{{ reading.diastolic_mm_hg }} mmHg</td>
+      <td>{{ reading.heart_rate_bpm }} bpm</td>
+      <td>{{ "%.1f"|format(reading.temperature_c) }}°C</td>
+      <td>{{ reading.oxygen_saturation }}%</td>
+      <td><span class="status {{ reading.alert_level }}">{% if reading.alert_level == 'urgent' %}Urgent review{% elif reading.alert_level == 'review' %}Review suggested{% else %}Within range{% endif %}</span></td>
+      <td>{% if reading.alert_level != 'routine' and not reading.reviewed_at %}<form method="post" action="{{ url_for('review_vitals', vital_id=reading.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button small" type="submit">Mark reviewed</button></form>{% elif reading.reviewed_at %}Reviewed{% else %}—{% endif %}</td>
+    </tr>{% endfor %}
+  </tbody></table></div>{% else %}<p class="empty">No patient readings are available for your care team yet.</p>{% endif %}
+</section>
 <section class="card" style="margin:24px 0"><p class="eyebrow">Schedule</p><h2>Your appointments</h2>{% if appointments %}<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Date</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>{% for appointment in appointments %}<tr><td>{{ appointment.patient_name }}</td><td>{{ appointment.appointment_date }}</td><td>{{ appointment.reason or '—' }}</td><td><span class="status">{{ appointment.status }}</span></td><td>{% if appointment.status == 'Scheduled' %}<a href="{{ url_for('consultation', appt_id=appointment.id) }}">Consultation</a> · <a href="{{ url_for('complete_appointment', appt_id=appointment.id) }}">Mark complete</a>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="empty">No appointments are scheduled yet.</p>{% endif %}</section>
 <section class="card"><p class="eyebrow">Patient records</p><h2>Add a visit record</h2>{% if patients %}<form method="post" action="{{ url_for('add_record') }}"><div class="form-grid"><div class="field"><label for="patient_id">Patient</label><select id="patient_id" name="patient_id" required>{% for patient in patients %}<option value="{{ patient.id }}">{{ patient.full_name }}</option>{% endfor %}</select></div><div class="field"><label for="record_type">Record type</label><input id="record_type" name="record_type" required></div><div class="field form-span"><label for="diagnosis">Diagnosis</label><input id="diagnosis" name="diagnosis" required></div><div class="field"><label for="prescription">Prescription (optional)</label><textarea id="prescription" name="prescription"></textarea></div><div class="field"><label for="notes">Visit notes (optional)</label><textarea id="notes" name="notes"></textarea></div></div><button class="button" type="submit">Save health record</button></form>{% else %}<p class="empty">No patient accounts are available yet.</p>{% endif %}</section>
 {% endblock %}

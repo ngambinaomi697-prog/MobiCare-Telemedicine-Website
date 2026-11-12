@@ -9,5 +9,35 @@
 <section class="card" style="margin:24px 0"><p class="eyebrow">Book a visit</p><h2>Request an appointment</h2>
   {% if doctors %}<form method="post" action="{{ url_for('book_appointment') }}"><div class="form-grid"><div class="field"><label for="doctor_id">Choose a doctor</label><select id="doctor_id" name="doctor_id" required>{% for doctor in doctors %}<option value="{{ doctor.id }}">{{ doctor.full_name }}</option>{% endfor %}</select></div><div class="field"><label for="appointment_date">Date and time</label><input id="appointment_date" name="appointment_date" type="datetime-local" required></div><div class="field form-span"><label for="reason">What would you like help with? (optional)</label><textarea id="reason" name="reason"></textarea></div></div><button class="button" type="submit">Request appointment</button></form>{% else %}<p class="empty">There are no doctors available yet.</p>{% endif %}
 </section>
+<section class="card" style="margin:24px 0">
+  <p class="eyebrow">Remote monitoring</p>
+  <h2>Record your vital signs</h2>
+  <p class="muted">Share a recent measurement with your care team. Automated flags support review and are not a diagnosis.</p>
+  <form method="post" action="{{ url_for('submit_vitals') }}" aria-describedby="vitals-guidance">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <div class="field"><label for="systolic_mm_hg">Systolic blood pressure (mmHg)</label><input id="systolic_mm_hg" name="systolic_mm_hg" type="number" min="50" max="300" step="1" required></div>
+      <div class="field"><label for="diastolic_mm_hg">Diastolic blood pressure (mmHg)</label><input id="diastolic_mm_hg" name="diastolic_mm_hg" type="number" min="30" max="200" step="1" required></div>
+      <div class="field"><label for="heart_rate_bpm">Heart rate (beats per minute)</label><input id="heart_rate_bpm" name="heart_rate_bpm" type="number" min="20" max="250" step="1" required></div>
+      <div class="field"><label for="temperature_c">Temperature (°C)</label><input id="temperature_c" name="temperature_c" type="number" min="25" max="45" step="0.1" required></div>
+      <div class="field"><label for="oxygen_saturation">Oxygen saturation (%)</label><input id="oxygen_saturation" name="oxygen_saturation" type="number" min="50" max="100" step="1" required></div>
+    </div>
+    <button class="button" type="submit">Save vital signs</button>
+  </form>
+  <p class="muted" id="vitals-guidance">For severe symptoms, contact a healthcare professional or local emergency services. Do not wait for an app alert.</p>
+  {% if vitals %}
+  <div class="table-wrap" style="margin-top:20px"><table><thead><tr><th>Recorded</th><th>Blood pressure</th><th>Heart rate</th><th>Temperature</th><th>Oxygen</th><th>Alert</th><th>Review</th></tr></thead><tbody>
+    {% for reading in vitals %}<tr>
+      <td>{{ reading.recorded_at.strftime('%b %d, %Y %H:%M') }}</td>
+      <td>{{ reading.systolic_mm_hg }}/{{ reading.diastolic_mm_hg }} mmHg</td>
+      <td>{{ reading.heart_rate_bpm }} bpm</td>
+      <td>{{ "%.1f"|format(reading.temperature_c) }}°C</td>
+      <td>{{ reading.oxygen_saturation }}%</td>
+      <td><span class="status {{ reading.alert_level }}">{% if reading.alert_level == 'urgent' %}Urgent review{% elif reading.alert_level == 'review' %}Review suggested{% else %}Within range{% endif %}</span></td>
+      <td>{% if reading.alert_level == 'routine' %}No review needed{% elif reading.reviewed_at %}Reviewed{% else %}Awaiting review{% endif %}</td>
+    </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">Your submitted measurements will appear here.</p>{% endif %}
+</section>
 <section class="card"><p class="eyebrow">Health records</p><h2>Your care history</h2>{% if records %}<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Diagnosis</th><th>Doctor</th><th>Prescription</th></tr></thead><tbody>{% for record in records %}<tr><td>{{ record.visit_date }}</td><td>{{ record.record_type }}</td><td>{{ record.diagnosis }}</td><td>{{ record.doctor_name }}</td><td>{{ record.prescription or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="empty">Your health records will appear here after a visit.</p>{% endif %}</section>
 {% endblock %}

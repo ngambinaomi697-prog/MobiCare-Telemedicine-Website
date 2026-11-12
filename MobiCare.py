@@ -6,11 +6,17 @@
 ==========================================================
 """
 
+import asyncio
+import hmac
+import math
 import os
-import uuid
 import sqlite3
+import threading
+import uuid
 from datetime import datetime
 from functools import wraps
+
+import asyncpg
 
 from flask import (
     Flask, render_template, request, redirect,
@@ -23,7 +29,207 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ==========================================================
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
-DATABASE = "mobicare.db"
+DATABASE = os.environ.get("MOBICARE_DATABASE", "mobicare.db")
+_neon_loop = None
+_neon_loop_thread = None
+_neon_loop_lock = threading.Lock()
+_neon_pool = None
+_neon_pool_lock = None
+
+
+def _get_neon_loop():
+    global _neon_loop, _neon_loop_thread
+    with _neon_loop_lock:
+        if _neon_loop is None:
+            _neon_loop = asyncio.new_event_loop()
+            _neon_loop_thread = threading.Thread(
+                target=_neon_loop.run_forever,
+                name="mobicare-neon-asyncio",
+                daemon=True,
+            )
+            _neon_loop_thread.start()
+    return _neon_loop
+
+
+async def _get_neon_pool():
+    global _neon_pool, _neon_pool_lock
+    if _neon_pool_lock is None:
+        _neon_pool_lock = asyncio.Lock()
+    async with _neon_pool_lock:
+        if _neon_pool is None:
+            database_url = os.environ.get("DATABASE_URL")
+            if not database_url:
+                raise RuntimeError("DATABASE_URL is not configured")
+            _neon_pool = await asyncpg.create_pool(
+                dsn=database_url,
+                min_size=1,
+                max_size=5,
+                command_timeout=10,
+            )
+    return _neon_pool
+
+
+def _run_neon(coroutine):
+    loop = _get_neon_loop()
+    future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    return future.result(timeout=15)
+
+
+async def _list_patient_vitals(patient_id, limit=20):
+    pool = await _get_neon_pool()
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT id, patient_id, systolic_mm_hg, diastolic_mm_hg,
+                   heart_rate_bpm, temperature_c, oxygen_saturation,
+                   alert_level, recorded_at, reviewed_at
+            FROM public.patient_vitals
+            WHERE patient_id = $1
+            ORDER BY recorded_at DESC
+            LIMIT $2
+            """,
+            int(patient_id),
+            int(limit),
+        )
+    return [dict(row) for row in rows]
+
+
+async def _list_vitals_for_patients(patient_ids, limit=100):
+    if not patient_ids:
+        return []
+    pool = await _get_neon_pool()
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT id, patient_id, systolic_mm_hg, diastolic_mm_hg,
+                   heart_rate_bpm, temperature_c, oxygen_saturation,
+                   alert_level, recorded_at, reviewed_at
+            FROM public.patient_vitals
+            WHERE patient_id = ANY($1::BIGINT[])
+            ORDER BY CASE alert_level
+                       WHEN 'urgent' THEN 0
+                       WHEN 'review' THEN 1
+                       ELSE 2
+                     END,
+                     recorded_at DESC
+            LIMIT $2
+            """,
+            [int(patient_id) for patient_id in patient_ids],
+            int(limit),
+        )
+    return [dict(row) for row in rows]
+
+
+async def _insert_patient_vital(patient_id, values, alert_level):
+    pool = await _get_neon_pool()
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(
+            """
+            INSERT INTO public.patient_vitals
+                (patient_id, systolic_mm_hg, diastolic_mm_hg,
+                 heart_rate_bpm, temperature_c, oxygen_saturation, alert_level)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+            """,
+            int(patient_id),
+            values["systolic_mm_hg"],
+            values["diastolic_mm_hg"],
+            values["heart_rate_bpm"],
+            values["temperature_c"],
+            values["oxygen_saturation"],
+            alert_level,
+        )
+
+
+async def _get_vital_patient_id(vital_id):
+    pool = await _get_neon_pool()
+    async with pool.acquire() as connection:
+        return await connection.fetchval(
+            "SELECT patient_id FROM public.patient_vitals WHERE id = $1",
+            int(vital_id),
+        )
+
+
+async def _mark_vital_reviewed(vital_id, doctor_id):
+    pool = await _get_neon_pool()
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(
+            """
+            UPDATE public.patient_vitals
+            SET reviewed_by = $2, reviewed_at = NOW()
+            WHERE id = $1 AND alert_level <> 'routine' AND reviewed_at IS NULL
+            RETURNING id
+            """,
+            int(vital_id),
+            int(doctor_id),
+        )
+
+
+def _classify_vitals(values):
+    systolic = values["systolic_mm_hg"]
+    diastolic = values["diastolic_mm_hg"]
+    heart_rate = values["heart_rate_bpm"]
+    temperature = values["temperature_c"]
+    oxygen = values["oxygen_saturation"]
+
+    if (
+        systolic >= 180
+        or diastolic >= 120
+        or heart_rate < 40
+        or heart_rate >= 130
+        or temperature >= 40
+        or oxygen < 90
+    ):
+        return "urgent"
+    if (
+        systolic < 90
+        or systolic >= 140
+        or diastolic < 60
+        or diastolic >= 90
+        or heart_rate < 50
+        or heart_rate > 100
+        or temperature < 35
+        or temperature >= 38
+        or oxygen < 94
+    ):
+        return "review"
+    return "routine"
+
+
+def _parse_vitals_form():
+    try:
+        values = {
+            "systolic_mm_hg": int(request.form.get("systolic_mm_hg", "")),
+            "diastolic_mm_hg": int(request.form.get("diastolic_mm_hg", "")),
+            "heart_rate_bpm": int(request.form.get("heart_rate_bpm", "")),
+            "temperature_c": round(float(request.form.get("temperature_c", "")), 1),
+            "oxygen_saturation": int(request.form.get("oxygen_saturation", "")),
+        }
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(values["temperature_c"]):
+        return None
+    if not 50 <= values["systolic_mm_hg"] <= 300:
+        return None
+    if not 30 <= values["diastolic_mm_hg"] <= 200:
+        return None
+    if values["diastolic_mm_hg"] >= values["systolic_mm_hg"]:
+        return None
+    if not 20 <= values["heart_rate_bpm"] <= 250:
+        return None
+    if not 25 <= values["temperature_c"] <= 45:
+        return None
+    if not 50 <= values["oxygen_saturation"] <= 100:
+        return None
+    return values
+
+
+def _validate_csrf_token():
+    expected = session.get("csrf_token")
+    submitted = request.form.get("csrf_token", "")
+    if not expected or not submitted or not hmac.compare_digest(expected, submitted):
+        abort(400)
 
 
 # ==========================================================
@@ -81,6 +287,13 @@ def init_db():
         );
     """)
 
+    user_columns = {row["name"] for row in cur.execute("PRAGMA table_info(users)")}
+    if "phone" not in user_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+    if "specialty" not in user_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN specialty TEXT")
+    conn.commit()
+
     # Seed demo users
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users")
@@ -95,7 +308,7 @@ def init_db():
         )
         cur.execute(
             "INSERT INTO users (username, email, password_hash, full_name, "
-            "role, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "role, phone) VALUES (?, ?, ?, ?, ?, ?)",
             ("Chisomo_Banda", "banda@mobicare.com",
              generate_password_hash("patient123"),
              "Chisomo Banda", "patient", "+2650998601427")
@@ -147,8 +360,9 @@ def current_user():
 
 @app.context_processor
 def inject_user():
-    """Make `user` available in every template automatically."""
-    return {"user": current_user()}
+    """Make the current user and form token available to templates."""
+    csrf_token = session.setdefault("csrf_token", uuid.uuid4().hex)
+    return {"user": current_user(), "csrf_token": csrf_token}
 
 
 # ==========================================================
@@ -285,12 +499,57 @@ def patient_dashboard():
     ).fetchall()
     conn.close()
 
+    try:
+        vitals = _run_neon(_list_patient_vitals(user_id))
+    except Exception as error:
+        app.logger.error("Remote vitals load failed (%s)", type(error).__name__)
+        vitals = []
+        flash("Remote monitoring is temporarily unavailable.", "warning")
+
     return render_template(
         "patient_dashboard.html",
         appointments=[dict(a) for a in appointments],
         records=[dict(r) for r in records],
-        doctors=[dict(d) for d in doctors]
+        doctors=[dict(d) for d in doctors],
+        vitals=vitals,
     )
+
+
+@app.route("/patient/vitals", methods=["POST"])
+@login_required
+@role_required("patient")
+def submit_vitals():
+    _validate_csrf_token()
+    values = _parse_vitals_form()
+    if values is None:
+        flash("Enter valid values for each measurement.", "danger")
+        return redirect(url_for("patient_dashboard"))
+
+    alert_level = _classify_vitals(values)
+    try:
+        _run_neon(
+            _insert_patient_vital(session["user_id"], values, alert_level)
+        )
+    except Exception as error:
+        app.logger.error("Remote vitals save failed (%s)", type(error).__name__)
+        flash("Your reading could not be saved. Please try again.", "danger")
+        return redirect(url_for("patient_dashboard"))
+
+    if alert_level == "urgent":
+        flash(
+            "Your reading was saved and flagged for urgent clinician review. "
+            "This automated flag is not a diagnosis.",
+            "warning",
+        )
+    elif alert_level == "review":
+        flash(
+            "Your reading was saved and flagged for clinician review. "
+            "This automated flag is not a diagnosis.",
+            "info",
+        )
+    else:
+        flash("Your reading was saved.", "success")
+    return redirect(url_for("patient_dashboard"))
 
 
 @app.route("/patient/book", methods=["POST"])
@@ -373,13 +632,76 @@ def doctor_dashboard():
     patients = conn.execute(
         "SELECT id, full_name FROM users WHERE role = 'patient'"
     ).fetchall()
+    patient_names = {int(patient["id"]): patient["full_name"] for patient in patients}
+    caseload_patient_ids = [
+        int(row["patient_id"])
+        for row in conn.execute(
+            "SELECT DISTINCT patient_id FROM appointments "
+            "WHERE doctor_id = ? AND status != 'Cancelled'",
+            (user_id,),
+        ).fetchall()
+    ]
     conn.close()
+
+    try:
+        vitals = _run_neon(_list_vitals_for_patients(caseload_patient_ids))
+        for reading in vitals:
+            reading["patient_name"] = patient_names.get(
+                int(reading["patient_id"]), "Patient"
+            )
+    except Exception as error:
+        app.logger.error("Clinician vitals load failed (%s)", type(error).__name__)
+        vitals = []
+        flash("Remote monitoring is temporarily unavailable.", "warning")
 
     return render_template(
         "doctor_dashboard.html",
         appointments=[dict(a) for a in appointments],
-        patients=[dict(p) for p in patients]
+        patients=[dict(p) for p in patients],
+        vitals=vitals,
     )
+
+
+@app.route("/doctor/vitals/<int:vital_id>/review", methods=["POST"])
+@login_required
+@role_required("doctor")
+def review_vitals(vital_id):
+    _validate_csrf_token()
+    try:
+        patient_id = _run_neon(_get_vital_patient_id(vital_id))
+    except Exception as error:
+        app.logger.error("Clinician vitals lookup failed (%s)", type(error).__name__)
+        flash("The reading could not be reviewed right now.", "danger")
+        return redirect(url_for("doctor_dashboard"))
+
+    if patient_id is None:
+        flash("This reading is no longer available.", "warning")
+        return redirect(url_for("doctor_dashboard"))
+
+    conn = get_db()
+    authorized = conn.execute(
+        "SELECT 1 FROM appointments "
+        "WHERE doctor_id = ? AND patient_id = ? AND status != 'Cancelled' LIMIT 1",
+        (session["user_id"], int(patient_id)),
+    ).fetchone()
+    conn.close()
+    if not authorized:
+        abort(403)
+
+    try:
+        updated = _run_neon(
+            _mark_vital_reviewed(vital_id, session["user_id"])
+        )
+    except Exception as error:
+        app.logger.error("Clinician vitals update failed (%s)", type(error).__name__)
+        flash("The reading could not be reviewed right now.", "danger")
+        return redirect(url_for("doctor_dashboard"))
+
+    if updated:
+        flash("Reading marked as reviewed.", "success")
+    else:
+        flash("This reading was already reviewed or is routine.", "info")
+    return redirect(url_for("doctor_dashboard"))
 
 
 @app.route("/doctor/add_record", methods=["POST"])
