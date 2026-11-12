@@ -5,6 +5,7 @@
   <p class="eyebrow">Join MobiCare</p><h1 style="font-size:2.2rem">Create your account</h1>
   <p class="muted">Set up a patient or doctor account to get started.</p>
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
       <div class="field"><label for="full_name">Full name</label><input id="full_name" name="full_name" autocomplete="name" required></div>
       <div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>

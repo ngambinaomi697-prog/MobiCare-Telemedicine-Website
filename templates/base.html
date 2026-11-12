@@ -14,6 +14,9 @@
     .status.routine{background:#e5f5eb;color:#1e5b38}
     .status.review{background:#fff2cf;color:#664700}
     .status.urgent{background:#ffe5e1;color:#8a2c24}
+    .inline-form{display:inline;margin:0}
+    .text-link{padding:0;border:0;background:none;color:var(--brand-dark);font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+    .text-link:hover{color:var(--brand)}
   </style>
 </head>
 <body>
@@ -25,7 +28,7 @@
         {% if user %}
           <span class="nav-user">{{ user.full_name }}</span>
           <a href="{{ url_for('dashboard') }}">Dashboard</a>
-          <a href="{{ url_for('logout') }}">Sign out</a>
+          <form class="inline-form" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="text-link" type="submit">Sign out</button></form>
         {% else %}
           <a href="{{ url_for('login') }}">Sign in</a>
           <a class="button small" href="{{ url_for('register') }}">Create account</a>

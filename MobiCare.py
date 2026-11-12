@@ -29,6 +29,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ==========================================================
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True,
+)
 DATABASE = os.environ.get("MOBICARE_DATABASE", "mobicare.db")
 _neon_loop = None
 _neon_loop_thread = None
@@ -232,6 +237,12 @@ def _validate_csrf_token():
         abort(400)
 
 
+@app.before_request
+def protect_state_changing_requests():
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        _validate_csrf_token()
+
+
 # ==========================================================
 # DATABASE HELPERS
 # ==========================================================
@@ -388,8 +399,12 @@ def register():
         phone = request.form.get("phone", "").strip()
         specialty = request.form.get("specialty", "").strip()
 
+        _validate_csrf_token()
         if not all([username, email, password, full_name, role]):
             flash("Please fill in all required fields.", "danger")
+            return redirect(url_for("register"))
+        if role not in {"patient", "doctor"}:
+            flash("Choose a valid account type.", "danger")
             return redirect(url_for("register"))
 
         if password != confirm:
@@ -410,18 +425,23 @@ def register():
             flash("Username or email already exists.", "danger")
             return redirect(url_for("register"))
 
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO users (username, email, password_hash, full_name, "
             "role, phone, specialty) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (username, email, generate_password_hash(password),
              full_name, role, phone,
              specialty if role == "doctor" else None)
         )
+        user_id = cursor.lastrowid
         conn.commit()
         conn.close()
 
-        flash("Account created successfully! Please log in.", "success")
-        return redirect(url_for("login"))
+        session.clear()
+        session["user_id"] = user_id
+        session["role"] = role
+        session["full_name"] = full_name
+        flash("Your account is ready. Explore your MobiCare dashboard.", "success")
+        return redirect(url_for("dashboard"))
 
     return render_template("register.html")
 
@@ -453,7 +473,7 @@ def login():
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     flash("You have been logged out.", "info")
@@ -587,7 +607,7 @@ def book_appointment():
     return redirect(url_for("patient_dashboard"))
 
 
-@app.route("/patient/cancel/<int:appt_id>")
+@app.route("/patient/cancel/<int:appt_id>", methods=["POST"])
 @login_required
 @role_required("patient")
 def cancel_appointment(appt_id):
@@ -732,7 +752,7 @@ def add_record():
     return redirect(url_for("doctor_dashboard"))
 
 
-@app.route("/doctor/complete/<int:appt_id>")
+@app.route("/doctor/complete/<int:appt_id>", methods=["POST"])
 @login_required
 @role_required("doctor")
 def complete_appointment(appt_id):
