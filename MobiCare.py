@@ -104,10 +104,10 @@ def init_db():
         )
         cur.execute(
             "INSERT INTO users (username, email, password_hash, full_name, "
-            "role, phone, specialty) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "role, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("Chisomo_Banda", "banda@mobicare.com",
              generate_password_hash("patient123"),
-             "Chisomo Banda", "patient", "+2650998601427", None)
+             "Chisomo Banda", "patient", "+2650998601427")
         )
         conn.commit()
         print("✅ Demo users created:")
