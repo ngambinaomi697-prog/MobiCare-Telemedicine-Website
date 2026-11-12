@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Consultation | MobiCare{% endblock %}
+{% block content %}
+<section class="card" style="max-width:760px;margin:12px auto"><p class="eyebrow">Telemedicine visit</p><h1 style="font-size:2.4rem">Your consultation</h1><p class="muted">Appointment scheduled for {{ appointment.appointment_date }}.</p><div style="padding:20px;background:var(--mint);border-radius:14px;margin:20px 0"><h2>Welcome to your care visit</h2><p style="margin:0">Your appointment room is ready. Room reference: <strong>{{ appointment.room_id }}</strong></p></div><p class="muted">This project currently provides the appointment and care-record workflow. Connect your preferred video provider to enable live calls.</p><a class="button secondary" href="{{ url_for('dashboard') }}">Return to dashboard</a></section>
+{% endblock %}

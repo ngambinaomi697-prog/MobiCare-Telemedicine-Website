@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Sign in | MobiCare{% endblock %}
+{% block content %}
+<section style="max-width:520px;margin:24px auto" class="card">
+  <p class="eyebrow">Welcome back</p><h1 style="font-size:2.2rem">Sign in to MobiCare</h1>
+  <p class="muted">Access your care dashboard and stay connected with your team.</p>
+  <form method="post">
+    <div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>
+    <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+    <button class="button" type="submit">Sign in</button>
+  </form>
+  <p class="muted" style="margin:18px 0 0">New to MobiCare? <a href="{{ url_for('register') }}">Create an account</a>.</p>
+</section>
+{% endblock %}
