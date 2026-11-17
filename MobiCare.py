@@ -809,6 +809,3 @@ if __name__ == "__main__":
     print(" 🩺 Doctor  : dr_sande / doctor101")
     print("=" * 55 + "\n")
     app.run(debug=False, host="0.0.0.0", port=5000)
-git mv MobiCare.py app.py
-git commit -m "Rename Flask entrypoint"
-git push
