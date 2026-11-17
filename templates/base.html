@@ -14,18 +14,24 @@
     .status.routine{background:#e5f5eb;color:#1e5b38}
     .status.review{background:#fff2cf;color:#664700}
     .status.urgent{background:#ffe5e1;color:#8a2c24}
+    .inline-form{display:inline;margin:0}
+    .text-link{padding:0;border:0;background:none;color:var(--brand-dark);font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+    .text-link:hover{color:var(--brand)}
   </style>
 </head>
 <body>
   <header class="topbar">
     <div class="shell nav">
-      <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 42 42" focusable="false"><path d="M21 37S5 27.7 5 17C5 10.6 8.5 6.5 13 6.5c3.4 0 6.1 2 8 4.7 1.9-2.7 4.6-4.7 8-4.7 4.5 0 8 4.1 8 10.5C37 27.7 21 37 21 37Z" fill="currentColor"/><path d="M8 21h7l3-6 5 12 3-6h8" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg></span><span>MobiCare</span></a>
+      <a class="brand" href="{{ url_for('dashboard') if user and user.role == 'patient' else url_for('index') }}"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 42 42" focusable="false"><path d="M21 37S5 27.7 5 17C5 10.6 8.5 6.5 13 6.5c3.4 0 6.1 2 8 4.7 1.9-2.7 4.6-4.7 8-4.7 4.5 0 8 4.1 8 10.5C37 27.7 21 37 21 37Z" fill="currentColor"/><path d="M8 21h7l3-6 5 12 3-6h8" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg></span><span>MobiCare</span></a>
       <nav class="nav-links" aria-label="Main navigation">
-        <a href="{{ url_for('index') }}">Home</a>
+        {% if not user or user.role != 'patient' %}
+          <a href="{{ url_for('index') }}">Home</a>
+          <a href="{{ url_for('index') }}#about">About us</a>
+        {% endif %}
         {% if user %}
           <span class="nav-user">{{ user.full_name }}</span>
           <a href="{{ url_for('dashboard') }}">Dashboard</a>
-          <a href="{{ url_for('logout') }}">Sign out</a>
+          <form class="inline-form" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="text-link" type="submit">Sign out</button></form>
         {% else %}
           <a href="{{ url_for('login') }}">Sign in</a>
           <a class="button small" href="{{ url_for('register') }}">Create account</a>

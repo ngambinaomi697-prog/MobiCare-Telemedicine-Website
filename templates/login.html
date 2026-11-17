@@ -5,6 +5,7 @@
   <p class="eyebrow">Welcome back</p><h1 style="font-size:2.2rem">Sign in to MobiCare</h1>
   <p class="muted">Access your care dashboard and stay connected with your team.</p>
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></div>
     <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
     <button class="button" type="submit">Sign in</button>

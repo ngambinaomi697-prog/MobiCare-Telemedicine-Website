@@ -18,6 +18,23 @@
     </div>
   </aside>
 </section>
+<section id="about" class="card" aria-labelledby="about-heading" style="margin:8px 0 24px;scroll-margin-top:24px">
+  <p class="eyebrow">About us</p>
+  <h2 id="about-heading">Connecting rural communities to care</h2>
+  <p class="muted">MobiCare’s core objective is to improve access to timely healthcare for people in rural Malawi by connecting patients and rural health workers with clinicians remotely.</p>
+  <p class="muted" style="margin-bottom:0">The platform aims to reduce avoidable travel and referrals, support vital-sign monitoring, and help care teams identify when a patient may need urgent in-person attention.</p>
+</section>
+<section aria-labelledby="features-heading" style="margin:24px 0">
+  <p class="eyebrow">Key features</p>
+  <h2 id="features-heading">Care support from consultation to follow-up</h2>
+  <p class="muted">Tools that help patients and care teams stay connected between visits.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px">
+    <article class="card"><p class="eyebrow">Consultations</p><h3>Video visits with clinicians</h3><p class="muted">Connect with a care professional remotely. Live video calls require a video provider to be configured.</p></article>
+    <article class="card"><p class="eyebrow">Prescriptions</p><h3>Online care records</h3><p class="muted">Review prescriptions recorded by your clinician alongside your visit notes and diagnosis.</p></article>
+    <article class="card"><p class="eyebrow">Follow-ups</p><h3>Keep the next step in view</h3><p class="muted">See scheduled appointments and return to your care team when you need follow-up.</p></article>
+    <article class="card"><p class="eyebrow">Monitoring</p><h3>Track vital signs</h3><p class="muted">Record blood pressure, heart rate, temperature, and oxygen levels for clinician review.</p></article>
+  </div>
+</section>
 <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;padding-bottom:24px" aria-label="Ways to use MobiCare">
   <article class="card"><p class="eyebrow">For patients</p><h3>Stay in the know</h3><p class="muted">Book appointments and review your care history from your patient dashboard.</p><a href="{{ url_for('register') }}">Create a patient account</a></article>
   <article class="card"><p class="eyebrow">For clinicians</p><h3>Support every visit</h3><p class="muted">Manage appointments and share visit records through your doctor dashboard.</p><a href="{{ url_for('register') }}">Create a doctor account</a></article>
