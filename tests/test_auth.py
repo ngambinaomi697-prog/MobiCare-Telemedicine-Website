@@ -39,6 +39,13 @@ class AuthFlowTests(unittest.TestCase):
         self.assertIsNotNone(match)
         return match.group(1).decode()
 
+    def test_session_cookie_is_available_in_embedded_preview(self):
+        response = self.client.get("/register")
+        cookie = response.headers.get("Set-Cookie", "")
+        self.assertIn("SameSite=None", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("HttpOnly", cookie)
+
     @patch("MobiCare.supabase_client.sign_up")
     def test_registration_always_creates_patient_role(self, sign_up):
         sign_up.return_value = {"user": self.auth_user}
