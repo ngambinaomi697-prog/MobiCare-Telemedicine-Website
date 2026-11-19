@@ -25,7 +25,7 @@
         {% if user %}
           <span class="nav-user">{{ user.full_name }}</span>
           <a href="{{ url_for('dashboard') }}">Dashboard</a>
-          <a href="{{ url_for('logout') }}">Sign out</a>
+          <form method="post" action="{{ url_for('logout') }}" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" style="border:0;background:none;padding:0;color:var(--brand-dark);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:3px">Sign out</button></form>
         {% else %}
           <a href="{{ url_for('login') }}">Sign in</a>
           <a class="button small" href="{{ url_for('register') }}">Create account</a>

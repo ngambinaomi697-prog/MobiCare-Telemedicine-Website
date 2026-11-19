@@ -20,6 +20,6 @@
 </section>
 <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;padding-bottom:24px" aria-label="Ways to use MobiCare">
   <article class="card"><p class="eyebrow">For patients</p><h3>Stay in the know</h3><p class="muted">Book appointments and review your care history from your patient dashboard.</p><a href="{{ url_for('register') }}">Create a patient account</a></article>
-  <article class="card"><p class="eyebrow">For clinicians</p><h3>Support every visit</h3><p class="muted">Manage appointments and share visit records through your doctor dashboard.</p><a href="{{ url_for('register') }}">Create a doctor account</a></article>
+  <article class="card"><p class="eyebrow">For clinicians</p><h3>Support every visit</h3><p class="muted">Manage appointments and share visit records through your doctor dashboard. Clinician access is provisioned by a MobiCare administrator.</p><a href="{{ url_for('login') }}">Clinician sign in</a></article>
 </section>
 {% endblock %}
