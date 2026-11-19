@@ -10,8 +10,10 @@ import asyncio
 import hmac
 import math
 import os
+import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime
 from functools import wraps
@@ -19,16 +21,37 @@ from functools import wraps
 import asyncpg
 
 from flask import (
-    Flask, render_template, request, redirect,
-    url_for, session, flash, abort
+    Flask, abort, flash, g, redirect, render_template, request,
+    session, url_for
 )
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import generate_password_hash
+
+import supabase_client
+from supabase_client import SupabaseError
 
 # ==========================================================
 # APP CONFIGURATION
 # ==========================================================
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("VERCEL_ENV") in {"preview", "production"},
+)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), geolocation=()"
+    if os.environ.get("VERCEL_ENV") == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000"
+    return response
+
+
 DATABASE = os.environ.get("MOBICARE_DATABASE", "mobicare.db")
 _neon_loop = None
 _neon_loop_thread = None
@@ -292,43 +315,201 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")
     if "specialty" not in user_columns:
         cur.execute("ALTER TABLE users ADD COLUMN specialty TEXT")
+    if "auth_user_id" not in user_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN auth_user_id TEXT")
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS users_auth_user_id_unique "
+        "ON users(auth_user_id) WHERE auth_user_id IS NOT NULL"
+    )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            session_id TEXT PRIMARY KEY,
+            auth_user_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
     conn.commit()
-
-    # Seed demo users
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users")
-    if cur.fetchone()[0] == 0:
-        cur.execute(
-            "INSERT INTO users (username, email, password_hash, full_name, "
-            "role, phone, specialty) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("dr_sande", "sandee@mobicare.com",
-             generate_password_hash("doctor101"),
-             "Dr. Micheal  Sande", "doctor", "+2650998601426",
-             "General Medicine")
-        )
-        cur.execute(
-            "INSERT INTO users (username, email, password_hash, full_name, "
-            "role, phone) VALUES (?, ?, ?, ?, ?, ?)",
-            ("Chisomo_Banda", "banda@mobicare.com",
-             generate_password_hash("patient123"),
-             "Chisomo Banda", "patient", "+2650998601427")
-        )
-        conn.commit()
-        print("✅ Demo users created:")
-        print("   Doctor : dr_sande / doctor101")
-        print("   Patient: Chisomo_Banda / patient123")
-
     conn.close()
 
 
 # ==========================================================
 # AUTH DECORATORS & HELPERS
 # ==========================================================
+VALID_PROFILE_ROLES = {"patient", "doctor", "admin", "administrator"}
+
+
+def _user_for_app(row):
+    return {key: row[key] for key in ("id", "username", "full_name", "role", "phone", "specialty")}
+
+
+def _delete_auth_session(session_id):
+    conn = get_db()
+    conn.execute("DELETE FROM auth_sessions WHERE session_id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def _resolve_local_user(auth_user, profile):
+    auth_user_id = str(auth_user.get("id", ""))
+    email = (auth_user.get("email") or "").strip().lower()
+    role = profile.get("role")
+    if not auth_user_id or not email or role not in VALID_PROFILE_ROLES:
+        raise PermissionError("This account is not provisioned for MobiCare.")
+
+    conn = get_db()
+    user = conn.execute(
+        "SELECT * FROM users WHERE auth_user_id = ?", (auth_user_id,)
+    ).fetchone()
+    if user:
+        conn.execute(
+            "UPDATE users SET role = ?, full_name = ?, phone = ? WHERE id = ?",
+            (role, profile.get("full_name") or user["full_name"],
+             profile.get("phone"), user["id"]),
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        conn.close()
+        return _user_for_app(user)
+
+    legacy_user = conn.execute(
+        "SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email,)
+    ).fetchone()
+    if legacy_user:
+        email_verified = bool(auth_user.get("email_confirmed_at") or auth_user.get("confirmed_at"))
+        if not email_verified or legacy_user["role"] != role:
+            conn.close()
+            raise PermissionError(
+                "This existing account needs secure administrator provisioning before sign-in."
+            )
+        conn.execute(
+            "UPDATE users SET auth_user_id = ?, full_name = ?, phone = ? WHERE id = ?",
+            (auth_user_id, profile.get("full_name") or legacy_user["full_name"],
+             profile.get("phone"), legacy_user["id"]),
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (legacy_user["id"],)).fetchone()
+        conn.close()
+        return _user_for_app(user)
+
+    preferred_username = (auth_user.get("user_metadata") or {}).get("username")
+    base_username = (preferred_username or email.split("@", 1)[0]).strip()[:60] or "patient"
+    username = base_username
+    if conn.execute(
+        "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (username,)
+    ).fetchone():
+        username = f"{base_username[:45]}_{auth_user_id[:8]}"
+    full_name = profile.get("full_name") or email.split("@", 1)[0]
+    conn.execute(
+        "INSERT INTO users (username, email, password_hash, full_name, role, phone, specialty, auth_user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+        (username, email, generate_password_hash(secrets.token_urlsafe(32)),
+         full_name, role, profile.get("phone"), auth_user_id),
+    )
+    conn.commit()
+    user = conn.execute("SELECT * FROM users WHERE auth_user_id = ?", (auth_user_id,)).fetchone()
+    conn.close()
+    return _user_for_app(user)
+
+
+def _save_auth_session(auth_user, profile, auth_response):
+    local_user = _resolve_local_user(auth_user, profile)
+    access_token = auth_response.get("access_token")
+    refresh_token = auth_response.get("refresh_token")
+    if not access_token or not refresh_token:
+        raise SupabaseError(401, "Supabase did not establish a login session")
+
+    session_id = secrets.token_urlsafe(32)
+    expires_at = time.time() + int(auth_response.get("expires_in", 3600))
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO auth_sessions (session_id, auth_user_id, user_id, access_token, refresh_token, expires_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, str(auth_user["id"]), local_user["id"], access_token, refresh_token, expires_at),
+    )
+    conn.commit()
+    conn.close()
+
+    session.clear()
+    session["auth_session_id"] = session_id
+    session["user_id"] = local_user["id"]
+    session["csrf_token"] = uuid.uuid4().hex
+    return local_user
+
+
+@app.before_request
+def load_authenticated_user():
+    g.mobicare_user = None
+    g.auth_error = False
+    session_id = session.get("auth_session_id")
+    if not session_id:
+        return
+
+    conn = get_db()
+    auth_session = conn.execute(
+        "SELECT * FROM auth_sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    if not auth_session:
+        session.clear()
+        return
+
+    auth_session = dict(auth_session)
+    access_token = auth_session["access_token"]
+    try:
+        if auth_session["expires_at"] <= time.time() + 60:
+            refreshed = supabase_client.refresh_session(auth_session["refresh_token"])
+            access_token = refreshed["access_token"]
+            auth_session["refresh_token"] = refreshed["refresh_token"]
+            auth_session["expires_at"] = time.time() + int(refreshed.get("expires_in", 3600))
+            conn = get_db()
+            conn.execute(
+                "UPDATE auth_sessions SET access_token = ?, refresh_token = ?, expires_at = ? WHERE session_id = ?",
+                (access_token, auth_session["refresh_token"], auth_session["expires_at"], session_id),
+            )
+            conn.commit()
+            conn.close()
+
+        auth_user = supabase_client.get_user(access_token)
+        if str(auth_user.get("id")) != auth_session["auth_user_id"]:
+            raise SupabaseError(401, "Session user mismatch")
+        profile = supabase_client.get_profile(access_token, auth_session["auth_user_id"])
+        if not profile:
+            raise SupabaseError(401, "Profile is unavailable")
+        local_user = _resolve_local_user(auth_user, profile)
+        if local_user["id"] != auth_session["user_id"]:
+            raise SupabaseError(401, "Session mapping mismatch")
+        local_user.update(
+            full_name=profile.get("full_name") or local_user["full_name"],
+            phone=profile.get("phone"),
+            role=profile["role"],
+        )
+        g.mobicare_user = local_user
+        session["user_id"] = local_user["id"]
+    except PermissionError:
+        _delete_auth_session(session_id)
+        session.clear()
+    except SupabaseError as error:
+        if error.status in {400, 401, 403}:
+            _delete_auth_session(session_id)
+            session.clear()
+        else:
+            g.auth_error = True
+
+
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if "user_id" not in session:
-            flash("Please log in to continue.", "warning")
+        if not g.mobicare_user:
+            flash(
+                "Session verification is temporarily unavailable. Please try again." if g.auth_error
+                else "Please log in to continue.",
+                "warning",
+            )
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return wrapper
@@ -338,7 +519,7 @@ def role_required(role):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            if session.get("role") != role:
+            if not g.mobicare_user or g.mobicare_user["role"] != role:
                 flash("Access denied.", "danger")
                 return redirect(url_for("dashboard"))
             return f(*args, **kwargs)
@@ -347,15 +528,8 @@ def role_required(role):
 
 
 def current_user():
-    """Return current logged-in user as a dict (or None)."""
-    if "user_id" not in session:
-        return None
-    conn = get_db()
-    user = conn.execute(
-        "SELECT * FROM users WHERE id = ?", (session["user_id"],)
-    ).fetchone()
-    conn.close()
-    return dict(user) if user else None
+    """Return the verified local profile mapped to the current Supabase user."""
+    return getattr(g, "mobicare_user", None)
 
 
 @app.context_processor
@@ -375,86 +549,153 @@ def index():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if "user_id" in session:
+    if g.mobicare_user:
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
+        _validate_csrf_token()
         username = request.form.get("username", "").strip()
-        email = request.form.get("email", "").strip()
+        email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
         confirm = request.form.get("confirm_password", "")
         full_name = request.form.get("full_name", "").strip()
-        role = request.form.get("role", "patient")
         phone = request.form.get("phone", "").strip()
-        specialty = request.form.get("specialty", "").strip()
 
-        if not all([username, email, password, full_name, role]):
+        if not all([username, email, password, full_name]):
             flash("Please fill in all required fields.", "danger")
             return redirect(url_for("register"))
-
         if password != confirm:
             flash("Passwords do not match.", "danger")
             return redirect(url_for("register"))
-
         if len(password) < 6:
             flash("Password must be at least 6 characters.", "danger")
             return redirect(url_for("register"))
 
         conn = get_db()
-        existing = conn.execute(
-            "SELECT id FROM users WHERE username = ? OR email = ?",
-            (username, email)
+        existing_email = conn.execute(
+            "SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email,)
         ).fetchone()
-        if existing:
-            conn.close()
-            flash("Username or email already exists.", "danger")
-            return redirect(url_for("register"))
-
-        conn.execute(
-            "INSERT INTO users (username, email, password_hash, full_name, "
-            "role, phone, specialty) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (username, email, generate_password_hash(password),
-             full_name, role, phone,
-             specialty if role == "doctor" else None)
-        )
-        conn.commit()
+        existing_username = conn.execute(
+            "SELECT id, email FROM users WHERE username = ? COLLATE NOCASE", (username,)
+        ).fetchone()
         conn.close()
 
-        flash("Account created successfully! Please log in.", "success")
-        return redirect(url_for("login"))
+        if existing_email and existing_email["auth_user_id"]:
+            flash("An account with this email already exists. Please sign in.", "danger")
+            return redirect(url_for("login"))
+        if existing_email and existing_email["role"] != "patient":
+            flash("This existing clinician account needs administrator provisioning before it can use Supabase sign-in.", "warning")
+            return redirect(url_for("login"))
+        if existing_username and (not existing_email or existing_username["id"] != existing_email["id"]):
+            flash("That username is already in use.", "danger")
+            return redirect(url_for("register"))
+
+        try:
+            signup = supabase_client.sign_up(
+                email,
+                password,
+                {"full_name": full_name, "phone": phone or None, "username": username},
+                url_for("login", _external=True, confirmed="1"),
+            )
+            auth_user = signup.get("user") or signup
+            auth_user_id = auth_user.get("id")
+            if not auth_user_id:
+                raise SupabaseError(502, "Supabase did not return a user identity")
+            if not existing_email:
+                conn = get_db()
+                conn.execute(
+                    "INSERT INTO users (username, email, password_hash, full_name, role, phone, specialty, auth_user_id) "
+                    "VALUES (?, ?, ?, ?, 'patient', ?, NULL, ?)",
+                    (username, email, generate_password_hash(secrets.token_urlsafe(32)),
+                     full_name, phone or None, str(auth_user_id)),
+                )
+                conn.commit()
+                conn.close()
+            flash("Account created. Check your email to confirm it, then sign in.", "success")
+            return redirect(url_for("login"))
+        except SupabaseError as error:
+            if "password" in error.message.lower() and any(
+                word in error.message.lower() for word in ("weak", "short", "characters", "strength")
+            ):
+                message = "Choose a stronger password that meets the account security requirements."
+            elif error.status in {400, 409}:
+                message = "We could not create the account. Check the details or sign in if this email is already registered."
+            else:
+                message = "Account creation is temporarily unavailable. Please try again."
+            flash(message, "danger")
+            return redirect(url_for("register"))
+        except sqlite3.IntegrityError:
+            flash("That username or email is already in use. Please sign in or choose another username.", "danger")
+            return redirect(url_for("register"))
 
     return render_template("register.html")
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if "user_id" in session:
+    if g.mobicare_user:
         return redirect(url_for("dashboard"))
+    if request.args.get("confirmed") == "1" and request.method == "GET":
+        flash("Email confirmed. Sign in to continue.", "success")
 
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
+        _validate_csrf_token()
+        email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
+        if not email or not password:
+            flash("Enter your email and password.", "danger")
+            return render_template("login.html"), 400
 
-        conn = get_db()
-        user = conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
-        conn.close()
+        try:
+            auth_response = supabase_client.sign_in(email, password)
+            auth_user = auth_response.get("user") or {}
+            auth_user_id = auth_user.get("id")
+            access_token = auth_response.get("access_token")
+            if not auth_user_id or not access_token:
+                raise SupabaseError(401, "Supabase did not establish a login session")
+            profile = supabase_client.get_profile(access_token, auth_user_id)
+            if not profile:
+                flash("Your profile is not ready yet. Confirm your email and try again.", "warning")
+                return render_template("login.html"), 401
+            local_user = _save_auth_session(auth_user, profile, auth_response)
+        except PermissionError:
+            flash("This existing account needs secure administrator provisioning before sign-in.", "warning")
+            return render_template("login.html"), 403
+        except SupabaseError as error:
+            if error.status == 400 and "confirm" in error.message.lower():
+                flash("Please confirm your email before signing in.", "warning")
+            elif error.status in {400, 401, 403}:
+                flash("Invalid email or password.", "danger")
+            else:
+                flash("Sign-in is temporarily unavailable. Please try again.", "danger")
+            return render_template("login.html"), 401 if error.status in {400, 401, 403} else 503
+        except sqlite3.IntegrityError:
+            flash("This account could not be linked to its local MobiCare record. Contact an administrator.", "warning")
+            return render_template("login.html"), 403
 
-        if user and check_password_hash(user["password_hash"], password):
-            session["user_id"] = user["id"]
-            session["role"] = user["role"]
-            session["full_name"] = user["full_name"]
-            flash(f"Welcome back, {user['full_name']}!", "success")
-            return redirect(url_for("dashboard"))
-
-        flash("Invalid username or password.", "danger")
+        flash(f"Welcome back, {profile.get('full_name') or local_user['full_name']}!", "success")
+        return redirect(url_for("dashboard"))
 
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
+    _validate_csrf_token()
+    session_id = session.get("auth_session_id")
+    if session_id:
+        conn = get_db()
+        auth_session = conn.execute(
+            "SELECT access_token FROM auth_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        conn.execute("DELETE FROM auth_sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+        if auth_session:
+            try:
+                supabase_client.sign_out(auth_session["access_token"])
+            except SupabaseError:
+                pass
     session.clear()
     flash("You have been logged out.", "info")
     return redirect(url_for("index"))
@@ -463,9 +704,11 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    if session.get("role") == "doctor":
+    if g.mobicare_user["role"] == "doctor":
         return redirect(url_for("doctor_dashboard"))
-    return redirect(url_for("patient_dashboard"))
+    if g.mobicare_user["role"] == "patient":
+        return redirect(url_for("patient_dashboard"))
+    abort(403)
 
 
 # ==========================================================
@@ -805,7 +1048,7 @@ if __name__ == "__main__":
     print(" 🏥 MobiCare Platform")
     print("=" * 55)
     print(" 🌐 http://127.0.0.1:5000")
-    print(" 👤 Patient : Chisomo_Banda / patient123")
-    print(" 🩺 Doctor  : dr_sande / doctor101")
+    print(" Supabase Auth handles new patient registration and login.")
+    print(" Existing SQLite clinical records remain stored locally.")
     print("=" * 55 + "\n")
     app.run(debug=False, host="0.0.0.0", port=5000)
